@@ -58,15 +58,30 @@ func field(_ text: String, _ key: String) -> String {
 class App: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     var lastD: Int64 = -1, lastT = Date(), rate = 0.0          // bytes/s (promedio suavizado) para el ETA
+    var busy = false
+
+    func buildMenu(_ lines: [String], connected: Bool) {
+        let m = NSMenu()
+        for t in lines { m.addItem(withTitle: t, action: nil, keyEquivalent: "") }
+        m.addItem(.separator())
+        let o = m.addItem(withTitle: "Abrir estado", action: #selector(open), keyEquivalent: "o"); o.target = self
+        let r = m.addItem(withTitle: "Actualizar", action: #selector(refresh), keyEquivalent: "r"); r.target = self
+        if connected { let e = m.addItem(withTitle: "Expulsar disco de forma segura…", action: #selector(eject), keyEquivalent: "e"); e.target = self }
+        let c = m.addItem(withTitle: "Configurar…", action: #selector(setup), keyEquivalent: ","); c.target = self
+        m.addItem(withTitle: "Salir", action: #selector(NSApp.terminate), keyEquivalent: "q")
+        item.menu = m
+    }
     func applicationDidFinishLaunching(_ n: Notification) {
         let img = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: "MirrorBar"); img?.isTemplate = true
         item.button?.image = img; item.button?.title = " …"; item.isVisible = true   // visible al instante
         item.autosaveName = "MirrorBar"
+        buildMenu(["Calculando estado…"], connected: true)
         refresh()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in self.refresh() }
     }
     @objc func refresh() {
         guard configured else { setup(); return }
+        if busy { return }; busy = true
         let src = path("Source"), dst = path("Mirror"), txt = statusFile()
         DispatchQueue.global().async {
             let connected = FileManager.default.fileExists(atPath: volumeOf(dst))
@@ -93,20 +108,11 @@ class App: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 let img = NSImage(systemSymbolName: sym, accessibilityDescription: "MirrorBar"); img?.isTemplate = true
                 self.item.button?.image = img; self.item.button?.imagePosition = .imageLeading; self.item.button?.title = label
-                let m = NSMenu()
-                for t in [connected ? "Estado: \(st)" : "Disco del espejo no conectado",
-                          "Última sincronización: \(last)",
-                          String(format: "Copiado: %.0f de %.0f GB (%d%%)", Double(d)/1e9, Double(s)/1e9, pct),
-                          String(format: "Velocidad: %.1f MB/s · Tiempo restante: ", self.rate/1e6) + eta] {
-                    m.addItem(withTitle: t, action: nil, keyEquivalent: "")
-                }
-                m.addItem(.separator())
-                let o = m.addItem(withTitle: "Abrir estado", action: #selector(self.open), keyEquivalent: "o"); o.target = self
-                let r = m.addItem(withTitle: "Actualizar", action: #selector(self.refresh), keyEquivalent: "r"); r.target = self
-                if connected { let e = m.addItem(withTitle: "Expulsar disco de forma segura…", action: #selector(self.eject), keyEquivalent: "e"); e.target = self }
-                let c = m.addItem(withTitle: "Configurar…", action: #selector(self.setup), keyEquivalent: ","); c.target = self
-                m.addItem(withTitle: "Salir", action: #selector(NSApp.terminate), keyEquivalent: "q")
-                self.item.menu = m
+                self.buildMenu([connected ? "Estado: \(st)" : "Disco del espejo no conectado",
+                                "Última sincronización: \(last)",
+                                String(format: "Copiado: %.0f de %.0f GB (%d%%)", Double(d)/1e9, Double(s)/1e9, pct),
+                                String(format: "Velocidad: %.1f MB/s · Tiempo restante: ", self.rate/1e6) + eta], connected: connected)
+                self.busy = false
             }
         }
     }
