@@ -57,9 +57,10 @@ func field(_ text: String, _ key: String) -> String {
 
 class App: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    var lastD: Int64 = -1, lastT = Date(), rate = 0.0          // bytes/s (promedio suavizado) para el ETA
     func applicationDidFinishLaunching(_ n: Notification) {
         refresh()
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in self.refresh() }
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in self.refresh() }
     }
     @objc func refresh() {
         guard configured else { setup(); return }
@@ -68,11 +69,23 @@ class App: NSObject, NSApplicationDelegate {
             let connected = FileManager.default.fileExists(atPath: volumeOf(dst))
             let s = size(src), d = connected ? size(dst) : 0
             let pct = s > 0 ? min(100, Int(d * 100 / s)) : 0
+            let now = Date(), dt = now.timeIntervalSince(self.lastT)
+            if self.lastD >= 0, dt > 5, d >= self.lastD {
+                let r = Double(d - self.lastD) / dt
+                self.rate = self.rate == 0 ? r : 0.7 * self.rate + 0.3 * r
+            }
+            self.lastD = d; self.lastT = now
+            let left = Double(max(0, s - d))
+            let eta: String = {
+                guard self.rate > 50_000, left > 0 else { return left > 0 ? "calculando…" : "—" }
+                let m = Int(left / self.rate / 60)
+                return m < 1 ? "< 1 min" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min"
+            }()
             let status = (try? String(contentsOfFile: txt, encoding: .utf8)) ?? ""
             let st = field(status, "Status:"), last = field(status, "Last sync:")
             let syncing = st == "—" ? pct < 100 : st.contains("SYNCING")
             let (sym, label) = !connected ? ("externaldrive", "") :
-                syncing ? ("arrow.triangle.2.circlepath", " \(pct)%") :
+                syncing ? ("arrow.triangle.2.circlepath", " \(pct)%" + (eta.hasSuffix("min") ? " · " + eta.replacingOccurrences(of: " min", with: "m").replacingOccurrences(of: " h ", with: "h ") : "")) :
                 st.contains("FAILED")  ? ("externaldrive.badge.exclamationmark", "") : ("externaldrive.badge.checkmark", "")
             DispatchQueue.main.async {
                 let img = NSImage(systemSymbolName: sym, accessibilityDescription: "MirrorBar"); img?.isTemplate = true
@@ -80,7 +93,8 @@ class App: NSObject, NSApplicationDelegate {
                 let m = NSMenu()
                 for t in [connected ? "Estado: \(st)" : "Disco del espejo no conectado",
                           "Última sincronización: \(last)",
-                          String(format: "Copiado: %.0f de %.0f GB (%d%%)", Double(d)/1e9, Double(s)/1e9, pct)] {
+                          String(format: "Copiado: %.0f de %.0f GB (%d%%)", Double(d)/1e9, Double(s)/1e9, pct),
+                          String(format: "Velocidad: %.1f MB/s · Tiempo restante: ", self.rate/1e6) + eta] {
                     m.addItem(withTitle: t, action: nil, keyEquivalent: "")
                 }
                 m.addItem(.separator())
