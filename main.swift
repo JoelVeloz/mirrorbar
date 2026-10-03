@@ -1,9 +1,8 @@
-// MirrorBar — muestra en la barra de menú el estado de un espejo (carpeta/disco virtual).
-// Configuración (opcional):
-//   defaults write com.joelveloz.mirrorbar Source     "/ruta/origen"
-//   defaults write com.joelveloz.mirrorbar Mirror     "/ruta/espejo"
-//   defaults write com.joelveloz.mirrorbar StatusFile "/ruta/estado.txt"   (líneas "Status:" y "Last sync:")
-//   defaults write com.joelveloz.mirrorbar Volume     "/Volumes/MiDisco"   (disco a expulsar)
+// MirrorBar — barra de menú nativa que muestra el estado de un espejo (carpeta o disco virtual)
+// y expulsa el disco del espejo de forma segura.
+// La primera vez pide elegir ORIGEN y ESPEJO y lo guarda (UserDefaults: com.joelveloz.mirrorbar).
+// Opcional: archivo de estado de tu script de sync con líneas "Status:" y "Last sync:"
+//   (por defecto: "<carpeta del espejo>/<nombre> - LAST SYNC.txt").
 import AppKit
 import UserNotifications
 
@@ -24,7 +23,23 @@ func notify(_ title: String, _ body: String) {
 }
 
 let cfg = UserDefaults.standard   // dominio = com.joelveloz.mirrorbar
-func path(_ k: String, _ d: String) -> String { (cfg.string(forKey: k) ?? d).replacingOccurrences(of: "~", with: NSHomeDirectory()) }
+func path(_ k: String) -> String { (cfg.string(forKey: k) ?? "").replacingOccurrences(of: "~", with: NSHomeDirectory()) }
+var configured: Bool { !path("Source").isEmpty && !path("Mirror").isEmpty }
+func volumeOf(_ p: String) -> String {            // "/Volumes/X/..." -> "/Volumes/X"
+    let c = (p as NSString).pathComponents
+    return c.count > 2 && c[1] == "Volumes" ? "/Volumes/" + c[2] : (p as NSString).deletingLastPathComponent
+}
+func statusFile() -> String {
+    let m = path("Mirror"); if !path("StatusFile").isEmpty { return path("StatusFile") }
+    let name = ((m as NSString).lastPathComponent as NSString).deletingPathExtension
+    return ((m as NSString).deletingLastPathComponent as NSString).appendingPathComponent("\(name) - LAST SYNC.txt")
+}
+func choose(_ title: String) -> String? {
+    let p = NSOpenPanel(); p.message = title; p.prompt = "Elegir"
+    p.canChooseFiles = true; p.canChooseDirectories = true; p.allowsMultipleSelection = false
+    NSApp.activate(ignoringOtherApps: true)
+    return p.runModal() == .OK ? p.url?.path : nil
+}
 
 func size(_ p: String) -> Int64 {
     guard let e = FileManager.default.enumerator(atPath: p) else { return 0 }
@@ -47,17 +62,17 @@ class App: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in self.refresh() }
     }
     @objc func refresh() {
-        let src = path("Source", "~/Discos/Joel Server.sparsebundle")
-        let dst = path("Mirror", "/Volumes/JOEL CLOUD/Joel Server.sparsebundle")
-        let txt = path("StatusFile", "/Volumes/JOEL CLOUD/Joel Server - LAST SYNC.txt")
+        guard configured else { setup(); return }
+        let src = path("Source"), dst = path("Mirror"), txt = statusFile()
         DispatchQueue.global().async {
-            let connected = FileManager.default.fileExists(atPath: (dst as NSString).deletingLastPathComponent)
+            let connected = FileManager.default.fileExists(atPath: volumeOf(dst))
             let s = size(src), d = connected ? size(dst) : 0
             let pct = s > 0 ? min(100, Int(d * 100 / s)) : 0
             let status = (try? String(contentsOfFile: txt, encoding: .utf8)) ?? ""
             let st = field(status, "Status:"), last = field(status, "Last sync:")
+            let syncing = st == "—" ? pct < 100 : st.contains("SYNCING")
             let (sym, label) = !connected ? ("externaldrive", "") :
-                st.contains("SYNCING") ? ("arrow.triangle.2.circlepath", " \(pct)%") :
+                syncing ? ("arrow.triangle.2.circlepath", " \(pct)%") :
                 st.contains("FAILED")  ? ("externaldrive.badge.exclamationmark", "") : ("externaldrive.badge.checkmark", "")
             DispatchQueue.main.async {
                 let img = NSImage(systemSymbolName: sym, accessibilityDescription: "MirrorBar"); img?.isTemplate = true
@@ -72,13 +87,14 @@ class App: NSObject, NSApplicationDelegate {
                 let o = m.addItem(withTitle: "Abrir estado", action: #selector(self.open), keyEquivalent: "o"); o.target = self
                 let r = m.addItem(withTitle: "Actualizar", action: #selector(self.refresh), keyEquivalent: "r"); r.target = self
                 if connected { let e = m.addItem(withTitle: "Expulsar disco de forma segura…", action: #selector(self.eject), keyEquivalent: "e"); e.target = self }
+                let c = m.addItem(withTitle: "Configurar…", action: #selector(self.setup), keyEquivalent: ","); c.target = self
                 m.addItem(withTitle: "Salir", action: #selector(NSApp.terminate), keyEquivalent: "q")
                 self.item.menu = m
             }
         }
     }
     @objc func eject() {
-        let vol = path("Volume", "/Volumes/JOEL CLOUD"), name = (vol as NSString).lastPathComponent
+        let vol = path("Volume").isEmpty ? volumeOf(path("Mirror")) : path("Volume"), name = (vol as NSString).lastPathComponent
         let busy = sh("pgrep -fl '\(vol)' | grep -v pgrep").1.isEmpty == false
         let a = NSAlert(); a.messageText = "¿Expulsar \(name)?"
         a.informativeText = busy ? "Hay copias en curso hacia este disco. Se detendrán de forma segura (lo copiado no se pierde y se reanuda al reconectar)." : "Se cerrarán los discos virtuales guardados en él y luego se expulsará."
@@ -99,7 +115,18 @@ class App: NSObject, NSApplicationDelegate {
             }
         }
     }
-    @objc func open() { NSWorkspace.shared.open(URL(fileURLWithPath: path("StatusFile", "/Volumes/JOEL CLOUD/Joel Server - LAST SYNC.txt"))) }
+    @objc func open() { NSWorkspace.shared.open(URL(fileURLWithPath: statusFile())) }
+    @objc func setup() {
+        guard let src = choose("1/2 — Elige el ORIGEN (la carpeta o disco virtual principal)"),
+              let dst = choose("2/2 — Elige el ESPEJO (la copia en el disco de respaldo)") else {
+            if !configured { item.button?.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+                let m = NSMenu(); let c = m.addItem(withTitle: "Configurar…", action: #selector(setup), keyEquivalent: ","); c.target = self
+                m.addItem(withTitle: "Salir", action: #selector(NSApp.terminate), keyEquivalent: "q"); item.menu = m }
+            return }
+        cfg.set(src, forKey: "Source"); cfg.set(dst, forKey: "Mirror")
+        notify("MirrorBar configurado", "Origen: \((src as NSString).lastPathComponent) → Espejo: \((dst as NSString).lastPathComponent)")
+        refresh()
+    }
 }
 
 let app = NSApplication.shared
