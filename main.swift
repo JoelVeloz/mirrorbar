@@ -56,9 +56,12 @@ class App: NSObject, NSApplicationDelegate {
             let pct = s > 0 ? min(100, Int(d * 100 / s)) : 0
             let status = (try? String(contentsOfFile: txt, encoding: .utf8)) ?? ""
             let st = field(status, "Status:"), last = field(status, "Last sync:")
-            let icon = !connected ? "💾" : st.contains("SYNCING") ? "🔄 \(pct)%" : st.contains("FAILED") ? "⚠️" : "✅"
+            let (sym, label) = !connected ? ("externaldrive", "") :
+                st.contains("SYNCING") ? ("arrow.triangle.2.circlepath", " \(pct)%") :
+                st.contains("FAILED")  ? ("externaldrive.badge.exclamationmark", "") : ("externaldrive.badge.checkmark", "")
             DispatchQueue.main.async {
-                self.item.button?.title = icon
+                let img = NSImage(systemSymbolName: sym, accessibilityDescription: "MirrorBar"); img?.isTemplate = true
+                self.item.button?.image = img; self.item.button?.imagePosition = .imageLeading; self.item.button?.title = label
                 let m = NSMenu()
                 for t in [connected ? "Estado: \(st)" : "Disco del espejo no conectado",
                           "Última sincronización: \(last)",
@@ -82,7 +85,7 @@ class App: NSObject, NSApplicationDelegate {
         a.addButton(withTitle: busy ? "Detener y expulsar" : "Expulsar"); a.addButton(withTitle: "Cancelar")
         NSApp.activate(ignoringOtherApps: true)
         guard a.runModal() == .alertFirstButtonReturn else { return }
-        item.button?.title = "⏏︎…"
+        item.button?.image = NSImage(systemSymbolName: "eject", accessibilityDescription: nil); item.button?.title = ""
         DispatchQueue.global().async {
             // 1) detener lo que escribe en el disco y comprobarlo
             sh("pkill -f '\(vol)'; for i in {1..15}; do pgrep -f '\(vol)' >/dev/null || exit 0; sleep 1; done; exit 1")
