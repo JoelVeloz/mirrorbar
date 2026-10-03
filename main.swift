@@ -41,11 +41,11 @@ func choose(_ title: String) -> String? {
     return p.runModal() == .OK ? p.url?.path : nil
 }
 
-func size(_ p: String) -> Int64 {
+func size(_ p: String) -> Int64 {                // suma rápida de tamaños (lstat, como du)
     guard let e = FileManager.default.enumerator(atPath: p) else { return 0 }
-    var t: Int64 = 0
+    var t: Int64 = 0, st = stat()
     while let f = e.nextObject() as? String {
-        t += (try? FileManager.default.attributesOfItem(atPath: p + "/" + f)[.size] as? Int64) ?? 0
+        if lstat(p + "/" + f, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG { t += Int64(st.st_size) }
     }
     return t
 }
