@@ -59,6 +59,9 @@ class App: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     var lastD: Int64 = -1, lastT = Date(), rate = 0.0          // bytes/s (promedio suavizado) para el ETA
     func applicationDidFinishLaunching(_ n: Notification) {
+        let img = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: "MirrorBar"); img?.isTemplate = true
+        item.button?.image = img; item.button?.title = " …"; item.isVisible = true   // visible al instante
+        item.autosaveName = "MirrorBar"
         refresh()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in self.refresh() }
     }
